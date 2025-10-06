@@ -1,32 +1,31 @@
 import csv
 import io
 import zipfile
-from flask import Flask, request, send_file, render_template_string
+from flask import Flask, request, send_file, render_template_string, redirect, url_for
 
 # =========================================================================
 # 1. LÓGICA DEL NEGOCIO (Adaptada para usar cadenas de texto en memoria)
 # =========================================================================
 
 # --- Configuración de Archivos y Codificación ---
-# NOTA: Los nombres de los archivos finales son usados solo para el ZIP de descarga
 DELIMITADOR = ';' 
 ENCODING = 'latin-1' 
 
 # POSICIONES y Constantes para RelacionONVIO.txt (Delimitado)
 COL_CODIGO_EMPLEADOR_ALIAS = 0 
-COL_ALIAS = 2                
+COL_ALIAS = 2 
 
 # POSICIONES y Constantes para Relacion_de_Conceptos.TXT (Ancho Fijo)
-POS_START = 6  
-POS_END = 16   
+POS_START = 6 
+POS_END = 16 
 CODIGO_LENGTH = 10 
 
 def limpiar_clave(texto):
-    """Limpia la cadena de texto de espacios, saltos de línea y caracteres invisibles."""
-    if texto is None:
-        return ""
-    # Esta limpieza es crucial para asegurar la coincidencia
-    return texto.strip().replace('\x00', '').upper()
+    """Limpia la cadena de texto de espacios, saltos de línea y caracteres invisibles."""
+    if texto is None:
+        return ""
+    # Se usa .strip() para eliminar espacios/saltos de línea al inicio/fin
+    return texto.strip().replace('\x00', '').upper()
 
 
 def procesar_archivos_de_texto(alias_content, conceptos_content):
@@ -54,6 +53,7 @@ def procesar_archivos_de_texto(alias_content, conceptos_content):
         reader = csv.reader(alias_stream, delimiter=DELIMITADOR)
         
         for fila in reader:
+            # Recreamos la línea original para el reporte de no utilizados
             linea_original_alias = DELIMITADOR.join(fila) + '\n'
             
             if len(fila) > COL_ALIAS:
@@ -81,6 +81,8 @@ def procesar_archivos_de_texto(alias_content, conceptos_content):
                     # --- CÓDIGO COINCIDENTE ---
                     codigos_utilizados.add(codigo_empleador_limpio)
                     nuevo_alias = mapeo_alias[codigo_empleador_limpio]
+                    
+                    # Formateo del nuevo alias para el ancho fijo
                     alias_formateado = nuevo_alias.ljust(CODIGO_LENGTH)
                     
                     linea_modificada = (
@@ -128,7 +130,6 @@ def procesar_archivos_de_texto(alias_content, conceptos_content):
 app = Flask(__name__)
 
 # Plantilla HTML para el formulario
-# NOTA: Incluí un mensaje de error si el usuario presiona "Procesar" sin subir archivos
 HTML_FORM = """
 <!doctype html>
 <html>
@@ -158,9 +159,9 @@ HTML_FORM = """
 </html>
 """
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET'])
 def index():
-    """Muestra el formulario inicial y maneja errores de subida si se redirige."""
+    """Muestra el formulario inicial, incluyendo mensajes de error si hay."""
     error_message = request.args.get('error', None)
     return render_template_string(HTML_FORM, error=error_message)
 
@@ -171,25 +172,24 @@ def process():
     conceptos_file = request.files.get('conceptos_file')
 
     if not alias_file or not conceptos_file:
-        # Redirigir de vuelta al formulario con un mensaje de error
+        # Si falta un archivo, redirigir con un mensaje de error
         return redirect(url_for('index', error="Debe subir ambos archivos (Alias y Conceptos)."))
 
     # 2. Leer y decodificar el contenido de los archivos
     try:
-        # Leemos los bytes y decodificamos según tu ENCODING (latin-1)
         alias_content = alias_file.read().decode(ENCODING)
         conceptos_content = conceptos_file.read().decode(ENCODING)
     except UnicodeDecodeError:
-        return "Error de codificación. Asegúrate de que los archivos sean 'latin-1' (ISO-8859-1).", 400
+        return redirect(url_for('index', error="Error de codificación. Asegúrese de que los archivos sean 'latin-1' (ISO-8859-1)."))
     except Exception as e:
-        return f"Error al leer los archivos: {e}", 500
+        return redirect(url_for('index', error=f"Error al leer los archivos: {e}"))
 
     # 3. Llamar a la lógica de procesamiento
     try:
         archivos_salida = procesar_archivos_de_texto(alias_content, conceptos_content)
     except Exception as e:
         # Captura cualquier error ocurrido dentro de tu lógica de negocio
-        return f"Error durante el procesamiento: {e}", 500
+        return redirect(url_for('index', error=f"Error durante el procesamiento de datos: {e}"))
 
     # 4. Crear un archivo ZIP en memoria (buffer)
     mem_zip = io.BytesIO()
